@@ -24,6 +24,14 @@ Configure /etc/hosts on the three pi's so they can access eachother via hostname
 192.168.2.18 master03 master03.kube.local
 ```
 
+Later when we install pi-hole it updates the resolvers on the nodes to use your pi-hole which causes issues with it downloading since it can't lookup what is needed to download and start until it starts.... As a workaround add this to the top of /etc/hosts on all nodes.
+```bash
+104.18.122.25 production.cloudflare.docker.com
+52.20.56.50 auth.docker.io
+52.6.170.51 docker.io
+54.236.165.68 registry-1.docker.io
+```
+
 Set the hostnames by running the following on the corrosponding pi's
 ```bash
 sudo hostnamectl set-hostname master01.kube.local
