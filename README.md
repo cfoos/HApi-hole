@@ -572,12 +572,22 @@ kubectl create namespace pihole
 helm install --namespace pihole --values pihole.yaml pihole mojo2600/pihole
 ```
 
+Installing this changes your resolv.conf to use pihole which makes it so k3s cannot resolve the dns to download it. You will want to remove the symlink /etc/resolv.conf and replace it with a normal file. Since I set my pihole to the .99 ip, I set this for my resolv.conf:
+
+```
+nameserver 192.168.2.99
+nameserver 1.1.1.1
+options edns0 trust-ad
+search localdomain
+```
+
+With this the pods will try your pihole first, then fail over to 1.1.1.1
+
 Now you should have pi-hole at
 http://192.168.2.99/admin/
 Some of the pods for this do not start and https access does not work. I have not had issues with http or the actual dns part of it.
 
 You can test the HA aspect by finding which node the services is running on and shutting it down. Your ceph cluster should give you warnings but still work, and dns should work again in 8 minutes. There is a default 5 minute wait, then for me it takes 3 min to start on the new node.
 
-I did notice there appears to be an issue where this configures your nodes to use pi-hole for dns, then cannot download the image to start it. I got around this by adding 8.8.8.8 to the resolve.conf and deleteing the pod so it tried again. Once it has an image it should not have issues again.
 
 I left ceph on defaults for rbd and cephfs in this case since with 3 nodes it will do a 3 copy replication meaning that each of your nodes has a copy of the data and with multi-master on k3s your pi-hole should survive 2 nodes dying.
