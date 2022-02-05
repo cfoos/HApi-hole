@@ -219,6 +219,49 @@ Now apply that config
 kubectl apply -f csi-config-map.yaml
 ```
 
+Recent versions of ceph-csi also require an additional ConfigMap object to define Key Management Service (KMS) provider details.
+```bash
+cat <<EOF > csi-kms-config-map.yaml
+---
+apiVersion: v1
+kind: ConfigMap
+data:
+  config.json: |-
+    {}
+metadata:
+  name: ceph-csi-encryption-kms-config
+EOF
+```
+
+Now apply that config
+```bash
+$ kubectl apply -f csi-kms-config-map.yaml
+```
+
+Recent versions of ceph-csi also require yet another ConfigMap object to define Ceph configuration to add to ceph.conf file inside CSI containers
+```bash
+cat <<EOF > ceph-config-map.yaml
+---
+apiVersion: v1
+kind: ConfigMap
+data:
+  ceph.conf: |
+    [global]
+    auth_cluster_required = cephx
+    auth_service_required = cephx
+    auth_client_required = cephx
+  # keyring is a required key and its value should be empty
+  keyring: |
+metadata:
+  name: ceph-config
+EOF
+```
+
+Now apply that config
+```bash
+kubectl apply -f ceph-config-map.yaml
+```
+
 Set up your access secret
 ```bash
 cat <<EOF > csi-rbd-secret.yaml
