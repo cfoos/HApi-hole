@@ -150,41 +150,25 @@ ceph orch device zap master01.kube.local /dev/sdb --force
 Do that on all nodes. I find applying osd to all available again speeds up adding the drives.
 
 
-Once ceph is running and drives added, we can install k3s. Run the following on all 3 master nodes.
+Once ceph is running and drives added, we can install k3s. Run the following on the first master node.
 ```bash
-curl -sfL https://get.k3s.io | sh -
-service k3s stop
+curl -sfL http://get.k3s.io | sh -s - server --cluster-init
 ```
 
-On master01 run the following and paste the output on master02&03 but do not run it yet.
-```bash
-echo "K3S_TOKEN=`cat /var/lib/rancher/k3s/server/node-token` k3s server --server https://192.168.2.16:6443 &"
-```
-
-On master01 run the following and then run the output on master01
-```bash
-echo "K3S_TOKEN=`cat /var/lib/rancher/k3s/server/node-token` k3s server --cluster-init &"
-```
-
-Give it at least a 20 count for it to get etcd running, then hit enter on master02 to run the command there. You will see the output stall for a second for etcd promotion, go a bit, stall, then start scrolling. At that point you can run the command on master03. If you run it too fast etcd will still be negotiating the adding of the previous node and the command will fail, simply wait a few seconds and run it again.
-
-At this time I open another session to master01 and run
+Check if the node is in the Ready state.
 ```bash
 sudo kubectl get nodes
 ```
 
-All three nodes should be in ready state
+Once the first master node is in the ready state, run this and run the output on additional master nodes waiting for each one to get to the ready state before doing the next one.
 ```bash
-master01.kube.local   Ready    control-plane,etcd,master   12d   v1.20.0+k3s2
-master02.kube.local   Ready    control-plane,etcd,master   12d   v1.20.0+k3s2
-master03.kube.local   Ready    control-plane,etcd,master   12d   v1.20.0+k3s2
+echo "curl -sfL http://get.k3s.io |K3S_TOKEN=`cat /var/lib/rancher/k3s/server/node-token` sh -s - server --server https://`hostname -i`:6443"
 ```
 
-Once everything is in Ready state, I reboot the nodes one at a time wating for the rebooted node to be back in ready before rebooting the next. You can check the status from any node.
 
-If you have extra pi's you want to add as k3s worker nodes run the follwoing on master01 and the output on each worker node.
+If you have extra pi's you want to add as k3s worker nodes run the follwoing on the first master and the output on each worker node.
 ```bash
-echo "curl -sfL http://get.k3s.io | K3S_URL=https://192.168.2.16:6443 K3S_TOKEN=`cat /var/lib/rancher/k3s/server/node-token` sh -"
+echo "curl -sfL http://get.k3s.io | K3S_URL=https://`hostname -i`:6443 K3S_TOKEN=`cat /var/lib/rancher/k3s/server/node-token` sh -"
 ```
 
 I go the extra step of labeling worker nodes.
