@@ -152,7 +152,7 @@ Do that on all nodes. I find applying osd to all available again speeds up addin
 
 Once ceph is running and drives added, we can install k3s. Run the following on the first master node.
 ```bash
-curl -sfL http://get.k3s.io | sh -s - server --cluster-init
+curl -sfL http://get.k3s.io | sh -s - server --disable servicelb,traefik --cluster-init
 ```
 
 Check if the node is in the Ready state.
@@ -162,7 +162,7 @@ sudo kubectl get nodes
 
 Once the first master node is in the ready state, run this and run the output on additional master nodes waiting for each one to get to the ready state before doing the next one.
 ```bash
-echo "curl -sfL http://get.k3s.io |K3S_TOKEN=`cat /var/lib/rancher/k3s/server/node-token` sh -s - server --server https://`hostname -i`:6443"
+echo "curl -sfL http://get.k3s.io |K3S_TOKEN=`cat /var/lib/rancher/k3s/server/node-token` sh -s - server --disable servicelb,traefik --server https://`hostname -i`:6443"
 ```
 
 
