@@ -443,53 +443,232 @@ and can access grafana at http://192.168.2.50:3000
 Now to move on to the pi-hole part of the HA pi-hole
 
 
-For pi-hole I used this https://github.com/MoJo2600/pihole-kubernetes
-
-I wanted my pi-hole to stay on the .99 IP, if you want a different one, update the config.
-
+First we need a namespace
 ```bash
-cat <<EOF > pihole.yaml
----
-persistentVolumeClaim:
-  enabled: true
-  accessModes:
-    - ReadWriteMany
-serviceWeb:
-  loadBalancerIP: 192.168.2.99
-  annotations:
-    metallb.universe.tf/allow-shared-ip: pihole-svc
-  type: LoadBalancer
+kubectl create namespace pihole
+```
 
-serviceDns:
-  loadBalancerIP: 192.168.2.99
-  annotations:
-    metallb.universe.tf/allow-shared-ip: pihole-svc
-  type: LoadBalancer
-
-resources:
-  limits:
-    cpu: 200m
-    memory: 256Mi
-  requests:
-    cpu: 100m
-    memory: 128Mi
-# If using in the real world, set up admin.existingSecret instead.
-adminPassword: admin
-DNS1: 1.1.1.1
-DNS2: 8.8.8.8
+Then before we forget, a secret to hold the web interface password. Update "superSecretPass" to the password you want.
+```bash
+cat <<EOF > piholesecret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pihole-secret
+  namespace: pihole
+type: Opaque
+stringData:
+  password: superSecretPass
 EOF
 ```
 
 ```bash
-export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-snap install helm --classic
-helm repo add mojo2600 https://mojo2600.github.io/pihole-kubernetes/
-helm repo update
-kubectl create namespace pihole
-helm install --namespace pihole --values pihole.yaml pihole mojo2600/pihole
+kubectl apply -f piholesecret.yaml
 ```
 
-Installing this changes your resolv.conf to use pihole which makes it so k3s cannot resolve the dns to download it. You will want to remove the symlink /etc/resolv.conf and replace it with a normal file. Since I set my pihole to the .99 ip, I set this for my resolv.conf:
+
+We need a persistent volume if we want stats and settings to survive restarts of pods. I set 1G but that is probably more than you need.
+```bash
+cat <<EOF > piholepvc.yaml
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pihole
+  namespace: pihole
+spec:
+  accessModes:
+    - ReadWriteMany
+  volumeMode: Filesystem
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: csi-cephfs-sc
+EOF
+```
+
+```bash
+kubectl apply -f piholepvc.yaml
+```
+
+
+To deply it, we need a deployment. The env section can use variables from teh pihold documentation. I set the dns resolvers used to quad 1 and quad 4 and the them to dark.
+https://github.com/pi-hole/docker-pi-hole/#running-pi-hole-docker
+```bash
+cat <<EOF > piholedeployment.yaml
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pihole
+  namespace: pihole
+  labels:
+    app: pihole
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: pihole
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: pihole
+        name: pihole
+    spec:
+      restartPolicy: Always
+      containers:
+      - name: pihole
+        image: pihole/pihole:latest
+        imagePullPolicy: Always
+        env:
+        - name: TZ
+          value: "America/Chicago"
+        - name: WEBPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: pihole-secret
+              key: password
+        - name: PIHOLE_DNS_
+          value: "1.1.1.1;8.8.8.8"
+        - name: WEBTHEME
+          value: "default-dark"
+        volumeMounts:
+        - name: pihole
+          mountPath: "/etc/pihole"
+          subPath: "pihole"
+        - name: pihole
+          mountPath: "/etc/dnsmasq.d"
+          subPath: "dnsmasq"
+      volumes:
+      - name: pihole
+        persistentVolumeClaim:
+          claimName: pihole
+EOF
+```
+
+```bash
+kubectl apply -f piholedeployment.yaml
+```
+
+Give it a few minutes and you should have a running pod in the pihole namespace.
+```bash
+kubectl get pods -n pihole
+```
+
+
+Now we need access. Metallb does not allow mixing tcp and udp so we will break those apart and since we are already doing that we might as well break apart the web and dns tcp as well.
+```bash
+cat <<EOF > piholeweb.yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pihole-web
+  namespace: pihole
+  annotations:
+    metallb.universe.tf/allow-shared-ip: pihole-svc
+spec:
+  selector:
+    app: pihole
+  allocateLoadBalancerNodePorts: true
+  externalTrafficPolicy: Local
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  loadBalancerIP: 192.168.2.99
+  ports:
+  - port: 80
+    protocol: TCP
+    targetPort: 80
+    name: pihole-admin
+  sessionAffinity: None
+  type: LoadBalancer
+EOF
+```
+
+```bash
+kubectl apply -f piholeweb.yaml
+```
+
+```bash
+cat <<EOF > piholednsudp.yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pihole-dns-udp
+  namespace: pihole
+  annotations:
+    metallb.universe.tf/allow-shared-ip: pihole-svc
+spec:
+  selector:
+    app: pihole
+  allocateLoadBalancerNodePorts: true
+  externalTrafficPolicy: Local
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  loadBalancerIP: 192.168.2.99
+  ports:
+  - port: 53
+    targetPort: 53
+    protocol: UDP
+    name: dns-udp
+  sessionAffinity: None
+  type: LoadBalancer
+EOF
+```
+
+```bash
+kubectl apply -f piholednsudp.yaml
+```
+
+
+```bash
+cat <<EOF > piholednstcp.yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pihole-dns-tcp
+  namespace: pihole
+  annotations:
+    metallb.universe.tf/allow-shared-ip: pihole-svc
+spec:
+  selector:
+    app: pihole
+  allocateLoadBalancerNodePorts: true
+  externalTrafficPolicy: Local
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  loadBalancerIP: 192.168.2.99
+  ports:
+  - port: 53
+    targetPort: 53
+    protocol: TCP
+    name: dns-tcp
+  sessionAffinity: None
+  type: LoadBalancer
+EOF
+```
+
+```bash
+kubectl apply -f piholednstcp.yaml
+```
+
+
+I update the resolv.conf on the nodes to prevent issues getting the pihole image to start it. You will want to remove the symlink /etc/resolv.conf and replace it with a normal file. Since I set my pihole to the .99 ip, I set this for my resolv.conf:
 
 ```
 nameserver 192.168.2.99
@@ -502,9 +681,8 @@ With this the pods will try your pihole first, then fail over to 1.1.1.1
 
 Now you should have pi-hole at
 http://192.168.2.99/admin/
-Some of the pods for this do not start and https access does not work. I have not had issues with http or the actual dns part of it.
 
 You can test the HA aspect by finding which node the services is running on and shutting it down. Your ceph cluster should give you warnings but still work, and dns should work again in 8 minutes. There is a default 5 minute wait, then for me it takes 3 min to start on the new node.
 
 
-I left ceph on defaults for rbd and cephfs in this case since with 3 nodes it will do a 3 copy replication meaning that each of your nodes has a copy of the data and with multi-master on k3s your pi-hole should survive 2 nodes dying.
+I left ceph on defaults for cephfs in this case since with 3 nodes it will do a 3 copy replication meaning that each of your nodes has a copy of the data and with multi-master on k3s your pi-hole should survive 2 nodes dying.
