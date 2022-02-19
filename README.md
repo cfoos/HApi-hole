@@ -177,47 +177,13 @@ kubectl label node worker01.kube.local node-role.kubernetes.io/worker=''
 ```
 
 
-Now I want some monitoring on the cluster, and I want my HA storage used so let's set up a ceph block device and k3s access to it.
+Now I want some monitoring on the cluster, and I want my HA storage used so let's set up ceph and k3s access to it.
 
-Create the pool, initialize it, and add a user. You will get a "[client.kubernetes]" output from the last command with a key, copy this to a safe place as this is your user access key to that pool
+This will create the cephfs volume on ceph for you.
 ```bash
-ceph osd pool create kubernetes
-rbd pool init kubernetes
-ceph auth get-or-create client.kubernetes mon 'profile rbd' osd 'profile rbd pool=kubernetes' mgr 'profile rbd pool=kubernetes'
+ceph fs volume create cephfs
 ```
 
-Now we need to know the cluster id. The output of the following will include a fsid, this is your cluster id, copy it down to modify future commands.
-```bash
-ceph mon dump
-```
-
-Now we need a config map, replace the IPs with the ones you have set for your ceph mon nodes. This should be master01,02,03 if you did not change anything to this point. Also add the cluster id in the quotes.
-```bash
-cat <<EOF > csi-config-map.yaml
----
-apiVersion: v1
-kind: ConfigMap
-data:
-  config.json: |-
-    [
-      {
-        "clusterID": "ID_HERE",
-        "monitors": [
-          "192.168.2.16:6789",
-          "192.168.2.17:6789",
-          "192.168.2.18:6789"
-        ]
-      }
-    ]
-metadata:
-  name: ceph-csi-config
-EOF
-```
-
-Now apply that config
-```bash
-kubectl apply -f csi-config-map.yaml
-```
 
 Recent versions of ceph-csi also require an additional ConfigMap object to define Key Management Service (KMS) provider details.
 ```bash
@@ -235,7 +201,7 @@ EOF
 
 Now apply that config
 ```bash
-$ kubectl apply -f csi-kms-config-map.yaml
+kubectl apply -f csi-kms-config-map.yaml
 ```
 
 Recent versions of ceph-csi also require yet another ConfigMap object to define Ceph configuration to add to ceph.conf file inside CSI containers
@@ -260,26 +226,6 @@ EOF
 Now apply that config
 ```bash
 kubectl apply -f ceph-config-map.yaml
-```
-
-Set up your access secret
-```bash
-cat <<EOF > csi-rbd-secret.yaml
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: csi-rbd-secret
-  namespace: default
-stringData:
-  userID: kubernetes
-  userKey: USER_KEY_HERE
-EOF
-```
-
-apply it
-```bash
-kubectl apply -f csi-rbd-secret.yaml
 ```
 
 
@@ -320,46 +266,82 @@ EOF
 kubectl apply -f kms-config.yaml
 ```
 
-
-We also need to set up a storage class, be sure to update the clusterID
+Now k3s needs a few things to be able to access
 ```bash
-cat <<EOF > csi-rbd-sc.yaml
+kubectl apply -f https://raw.githubusercontent.com/ceph/ceph-csi/master/deploy/cephfs/kubernetes/csi-cephfsplugin-provisioner.yaml
+kubectl apply -f https://raw.githubusercontent.com/ceph/ceph-csi/master/deploy/cephfs/kubernetes/csi-cephfsplugin.yaml
+kubectl apply -f https://raw.githubusercontent.com/ceph/ceph-csi/master/deploy/cephfs/kubernetes/csi-nodeplugin-psp.yaml
+kubectl apply -f https://raw.githubusercontent.com/ceph/ceph-csi/master/deploy/cephfs/kubernetes/csi-nodeplugin-rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/ceph/ceph-csi/master/deploy/cephfs/kubernetes/csi-provisioner-psp.yaml
+kubectl apply -f https://raw.githubusercontent.com/ceph/ceph-csi/master/deploy/cephfs/kubernetes/csi-provisioner-rbac.yaml
+```
+
+We need a secret to access this. You should set up a user with access to cephfs, but I am just going to use admin for both admin and user. You can get the admin key from
+```bash
+cat /etc/ceph/ceph.client.admin.keyring
+```
+
+```bash
+cat <<EOF > csi-cephfs-secret.yaml
 ---
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
+apiVersion: v1
+kind: Secret
 metadata:
-   name: csi-rbd-sc
-provisioner: rbd.csi.ceph.com
-parameters:
-   clusterID: ID_HERE
-   pool: kubernetes
-   csi.storage.k8s.io/provisioner-secret-name: csi-rbd-secret
-   csi.storage.k8s.io/provisioner-secret-namespace: default
-   csi.storage.k8s.io/node-stage-secret-name: csi-rbd-secret
-   csi.storage.k8s.io/node-stage-secret-namespace: default
-reclaimPolicy: Delete
-mountOptions:
-   - discard
+  name: csi-cephfs-secret
+  namespace: default
+stringData:
+  userID: admin
+  userKey: ADMIN_KEY
+  adminID: admin
+  adminKey: ADMIN_KEY
 EOF
 ```
 
 ```bash
-kubectl apply -f csi-rbd-sc.yaml
+kubectl apply -f csi-cephfs-secret.yaml
 ```
 
-Now we need our provisioner and plugin. You may not need rbac, I just add it anyway.
+
+Now we need to know the cluster id. The output of the following will include a fsid, this is your cluster id, copy it down to modify future commands.
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/ceph/ceph-csi/master/deploy/rbd/kubernetes/csi-provisioner-rbac.yaml
-kubectl apply -f https://raw.githubusercontent.com/ceph/ceph-csi/master/deploy/rbd/kubernetes/csi-nodeplugin-rbac.yaml
-kubectl apply -f https://raw.githubusercontent.com/ceph/ceph-csi/master/deploy/rbd/kubernetes/csi-rbdplugin.yaml
-kubectl apply -f https://raw.githubusercontent.com/ceph/ceph-csi/master/deploy/rbd/kubernetes/csi-rbdplugin-provisioner.yaml
+ceph mon dump
+```
+
+Now we need a storage class. Be sure to update the cluster ID. It is the same as what you got before.
+```bash
+cat <<EOF > cephfs-csi-sc.yml
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: csi-cephfs-sc
+provisioner: cephfs.csi.ceph.com
+parameters:
+  clusterID: CLUSTER_ID
+  fsName: cephfs
+  csi.storage.k8s.io/provisioner-secret-name: csi-cephfs-secret
+  csi.storage.k8s.io/provisioner-secret-namespace: default
+  csi.storage.k8s.io/controller-expand-secret-name: csi-cephfs-secret
+  csi.storage.k8s.io/controller-expand-secret-namespace: default
+  csi.storage.k8s.io/node-stage-secret-name: csi-cephfs-secret
+  csi.storage.k8s.io/node-stage-secret-namespace: default
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+mountOptions:
+  - debug
+EOF
 ```
 
 
-Make sure your storageclass is added
+```bash
+kubectl apply -f cephfs-csi-sc.yml
+```
+
+Check your storageclass was added.
 ```bash
 kubectl get storageclass
 ```
+
 
 Watch and wait for all pods to start addressing any issues before proceeding.
 ```bash
@@ -367,12 +349,17 @@ watch "kubectl get pods --all-namespaces"
 ```
 
 
-Once everything is good, I like to make the ceph rbd the default storage class
+I like to make this the new default as it just makes things easier.
 ```bash
-kubectl patch storageclass csi-rbd-sc -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+kubectl patch storageclass csi-cephfs-sc -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
 kubectl patch storageclass local-path -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'
 ```
 
+Check storageclass again and make sure only the cephfs one is marked default.
+
+```bash
+kubectl get storageclass
+```
 
 Now we are going to add metallb and get it setup.
 ```bash
@@ -424,10 +411,10 @@ Read the settings in the vars.jsonnet. Here are a few settings I recommend
     prometheus: true,
     grafana: true,
 
-    storageClass: 'csi-rbd-sc',
+    storageClass: 'csi-cephfs-sc',
 ```
 
-Since rbd is the default you do not technically need to set the storageclass. I also recommend increasing the size of the volumes if you do not know how to resize a pv and pvc as the defaults are a bit low and filled for me in 2 days. I do have 8 nodes though.
+Since cephfs is the default you do not technically need to set the storageclass. I also recommend increasing the size of the volumes if you do not know how to resize a pv and pvc as the defaults are a bit low and filled for me in 2 days. I do have 8 nodes though.
 
 
 Once all the pods are running it is time to change grafana so you can access it via IP.
@@ -455,96 +442,6 @@ and can access grafana at http://192.168.2.50:3000
 
 Now to move on to the pi-hole part of the HA pi-hole
 
-I want to use cephfs for this for ReadWriteMany so we need to get that set up as well.
-
-
-This will create the cephfs volume on ceph for you.
-```bash
-ceph fs volume create cephfs
-```
-
-Now k3s needs access
-```bash
-kubectl apply -f https://raw.githubusercontent.com/ceph/ceph-csi/master/deploy/cephfs/kubernetes/csi-cephfsplugin-provisioner.yaml
-kubectl apply -f https://raw.githubusercontent.com/ceph/ceph-csi/master/deploy/cephfs/kubernetes/csi-cephfsplugin.yaml
-kubectl apply -f https://raw.githubusercontent.com/ceph/ceph-csi/master/deploy/cephfs/kubernetes/csi-nodeplugin-psp.yaml
-kubectl apply -f https://raw.githubusercontent.com/ceph/ceph-csi/master/deploy/cephfs/kubernetes/csi-nodeplugin-rbac.yaml
-kubectl apply -f https://raw.githubusercontent.com/ceph/ceph-csi/master/deploy/cephfs/kubernetes/csi-provisioner-psp.yaml
-kubectl apply -f https://raw.githubusercontent.com/ceph/ceph-csi/master/deploy/cephfs/kubernetes/csi-provisioner-rbac.yaml
-```
-
-We need a secret to access this. You should set up a user with access to cephfs, but I am just going to use admin for both admin and user. You can get the admin key from
-```bash
-cat /etc/ceph/ceph.client.admin.keyring
-```
-
-
-```bash
-cat <<EOF > csi-cephfs-secret.yaml
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: csi-cephfs-secret
-  namespace: default
-stringData:
-  userID: admin
-  userKey: ADMIN_KEY
-  adminID: admin
-  adminKey: ADMIN_KEY
-EOF
-```
-
-```bash
-kubectl apply -f csi-cephfs-secret.yaml
-```
-
-
-Now we need a storage class. Be sure to update the cluster ID. It is the same as what you got before.
-```bash
-cat <<EOF > cephfs-csi-sc.yml
----
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: csi-cephfs-sc
-provisioner: cephfs.csi.ceph.com
-parameters:
-  clusterID: CLUSTER_ID
-  fsName: cephfs
-  csi.storage.k8s.io/provisioner-secret-name: csi-cephfs-secret
-  csi.storage.k8s.io/provisioner-secret-namespace: default
-  csi.storage.k8s.io/controller-expand-secret-name: csi-cephfs-secret
-  csi.storage.k8s.io/controller-expand-secret-namespace: default
-  csi.storage.k8s.io/node-stage-secret-name: csi-cephfs-secret
-  csi.storage.k8s.io/node-stage-secret-namespace: default
-reclaimPolicy: Delete
-allowVolumeExpansion: true
-mountOptions:
-  - debug
-EOF
-```
-
-```bash
-kubectl apply -f cephfs-csi-sc.yml
-```
-
-Check your storageclass was added.
-```bash
-kubectl get storageclass
-```
-
-I like to make this the new default as it just makes things easier.
-```bash
-kubectl patch storageclass csi-rbd-sc -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'
-kubectl patch storageclass csi-cephfs-sc -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
-```
-
-Check storageclass again and make sure only the cephfs one is marked default.
-
-```bash
-kubectl get storageclass
-```
 
 For pi-hole I used this https://github.com/MoJo2600/pihole-kubernetes
 
