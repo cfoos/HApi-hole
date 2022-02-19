@@ -6,30 +6,32 @@ To set this up you will need 3 Raspberry pi 4's with 8G RAM and 2 high speed dri
 
 I used:
 * 3x https://www.amazon.com/gp/product/B089K47QDN/
-* 3x https://www.amazon.com/gp/product/B07ZV1LLWK/
 * 6x https://www.amazon.com/gp/product/B07S9CKV7X/
 * 3x https://www.amazon.com/gp/product/B01N5IB20Q/
 * 3x https://www.amazon.com/gp/product/B01N0TQPQB/
+* 3x https://www.amazon.com/gp/product/B0974TK3KD/
+
+I had to solder a jumper wire between the 5v gpio and usb since using two drives would draw too much current for the usb controller and cause drives to be dropped.
 
 Image the 3 smaller SSD's with Ubuntu 20.10 64bit for raspberry pi and setup your pi's to boot from USB. You may need to use raspberry OS to update the firmware before USB boot works.
 
 Connect the 3 OS drives into the top usb3.0 ports and the 3 blank ones onto the bottom usb3.0 ports on your pi's.
 
-Make sure you have static IPs. Most these commands are ran on master01
+Make sure you have static IPs. Most these commands are ran on pi01
 
 Configure /etc/hosts on the three pi's so they can access eachother via hostname.
 ```bash
-192.168.2.16 master01 master01.kube.local
-192.168.2.17 master02 master02.kube.local
-192.168.2.18 master03 master03.kube.local
+192.168.2.101 pi01 pi01.kube.local
+192.168.2.102 pi02 pi02.kube.local
+192.168.2.103 pi03 pi03.kube.local
 ```
 
 
 Set the hostnames by running the following on the corrosponding pi's
 ```bash
-sudo hostnamectl set-hostname master01.kube.local
-sudo hostnamectl set-hostname master02.kube.local
-sudo hostnamectl set-hostname master03.kube.local
+sudo hostnamectl set-hostname pi01.kube.local
+sudo hostnamectl set-hostname pi02.kube.local
+sudo hostnamectl set-hostname pi03.kube.local
 ```
 
 make needed cgroup changes for k3s
@@ -91,9 +93,9 @@ systemctl disable etcd
 systemctl stop etcd
 ```
 
-Now to get ceph up and running. Replace --mon-ip with the IP you set for master01
+Now to get ceph up and running. Replace --mon-ip with the IP you set for pi01
 ```bash
-cephadm bootstrap --skip-monitoring-stack --allow-fqdn-hostname --ssh-user cephuser --mon-ip 192.168.2.16
+cephadm bootstrap --skip-monitoring-stack --allow-fqdn-hostname --ssh-user cephuser --mon-ip 192.168.2.101
 ```
 
 This may take a while, when it is done you will get a login url and admin user/pass. Log in and update the password.
@@ -105,24 +107,24 @@ ceph config set mgr mgr/cephadm/manage_etc_ceph_ceph_conf true
 
 Copy the ceph SSH key to the other nodes. This is where you need to remember that password.
 ```bash
-ssh-copy-id -f -i /etc/ceph/ceph.pub cephuser@master02.kube.local
-ssh-copy-id -f -i /etc/ceph/ceph.pub cephuser@master03.kube.local
+ssh-copy-id -f -i /etc/ceph/ceph.pub cephuser@pi02.kube.local
+ssh-copy-id -f -i /etc/ceph/ceph.pub cephuser@pi03.kube.local
 ```
 
 Add your other nodes
 ```bash
-ceph orch host add master02.kube.local
-ceph orch host add master03.kube.local
+ceph orch host add pi02.kube.local
+ceph orch host add pi03.kube.local
 ```
 
 Now to set the manager interface to run on all the nodes so you have access. You could pin this and I may see about running it separately in k3s to reduce resource usage later.
 ```bash
-ceph orch apply mgr --placement="master01.kube.local master02.kube.local master03.kube.local"
+ceph orch apply mgr --placement="pi01.kube.local pi02.kube.local pi03.kube.local"
 ```
 
 Tell ceph to run the min of 3 monitors on your 3 master nodes. If you add master nodes in the future you can add them here. This is mainly so I can add OSD only nodes in the future and not have to worry about monitor services being started on it allowing me to use 4G RAM or lower nodes depending on the size of the disks.
 ```bash
-ceph orch apply mon --placement="3 master01.kube.local master02.kube.local master03.kube.local"
+ceph orch apply mon --placement="3 pi01.kube.local pi02.kube.local pi03.kube.local"
 ```
 
 Wait a while for all the hosts to be added. You can see this in the interface you logged into earlier.
@@ -144,7 +146,7 @@ lsblk
 
 Make sure your OS is sda, and if your sdb has a blank fs you can clear it with
 ```bash
-ceph orch device zap master01.kube.local /dev/sdb --force
+ceph orch device zap pi01.kube.local /dev/sdb --force
 ```
 
 Do that on all nodes. I find applying osd to all available again speeds up adding the drives.
@@ -173,7 +175,7 @@ echo "curl -sfL http://get.k3s.io | K3S_URL=https://`hostname -i`:6443 K3S_TOKEN
 
 I go the extra step of labeling worker nodes.
 ```bash
-kubectl label node worker01.kube.local node-role.kubernetes.io/worker=''
+kubectl label node pi04.kube.local node-role.kubernetes.io/worker=''
 ```
 
 
@@ -266,7 +268,7 @@ EOF
 kubectl apply -f kms-config.yaml
 ```
 
-Now k3s needs a few things to be able to access
+Now k3s needs a few things to be able to access ceph
 ```bash
 kubectl apply -f https://raw.githubusercontent.com/ceph/ceph-csi/master/deploy/cephfs/kubernetes/csi-cephfsplugin-provisioner.yaml
 kubectl apply -f https://raw.githubusercontent.com/ceph/ceph-csi/master/deploy/cephfs/kubernetes/csi-cephfsplugin.yaml
@@ -368,7 +370,7 @@ kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/main/manifest
 kubectl create secret generic -n metallb-system memberlist --from-literal=secretkey="$(openssl rand -base64 128)"
 ```
 
-You will need to make a config for it to work. I'm using the layer2 protocol. For the addresses, set a range that is not in your dhcp range. My dhcp is .100 and higher and I do static IPs below .50 so .50-.99 is safe for metallb to assign as it pleases.
+You will need to make a config for it to work. I'm using the layer2 protocol. For the addresses, set a range that is not in your dhcp range. My dhcp is .150 and higher and I do static IPs below .50 so .50-.99 is safe for metallb to assign as it pleases.
 ```bash
 cat <<EOF > metallb-config.yml
 apiVersion: v1
@@ -492,7 +494,7 @@ kubectl apply -f piholepvc.yaml
 ```
 
 
-To deply it, we need a deployment. The env section can use variables from teh pihold documentation. I set the dns resolvers used to quad 1 and quad 4 and the them to dark.
+To deply it, we need a deployment. The env section can use variables from teh pihold documentation. I set the dns resolvers used to quad 1 and quad 8 and the them to dark.
 https://github.com/pi-hole/docker-pi-hole/#running-pi-hole-docker
 ```bash
 cat <<EOF > piholedeployment.yaml
