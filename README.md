@@ -186,6 +186,35 @@ This will create the cephfs volume on ceph for you.
 ceph fs volume create cephfs
 ```
 
+Now we need a config map, replace the IPs with the ones you have set for your ceph mon nodes. This should be pi01,02,03 if you did not change anything to this point. Also add the cluster id in the quotes.
+
+```bash
+cat <<EOF > csi-config-map.yaml
+---
+apiVersion: v1
+kind: ConfigMap
+data:
+  config.json: |-
+    [
+      {
+        "clusterID": "ID_HERE",
+        "monitors": [
+          "192.168.2.101:6789",
+          "192.168.2.102:6789",
+          "192.168.2.103:6789"
+        ]
+      }
+    ]
+metadata:
+  name: ceph-csi-config
+EOF
+```
+
+Now apply that config
+```bash
+kubectl apply -f csi-config-map.yaml
+```
+
 
 Recent versions of ceph-csi also require an additional ConfigMap object to define Key Management Service (KMS) provider details.
 ```bash
