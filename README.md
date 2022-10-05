@@ -59,7 +59,7 @@ sudo apt install libraspberrypi-bin rng-tools haveged net-tools sysstat lm-senso
 sudo apt install etcd docker.io ntp snapd ceph-common lvm2 cephadm build-essential golang git kubetail linux-modules-extra-raspi -y
 ```
 
-Now we are going to get etcd working on the system.
+Now we are going to get etcd working on the system. Not needed on 22.04, might still be needed on 20.04.
 ```bash
 mkdir /etc/etcd
 touch /etc/etcd/etcd.conf
