@@ -56,7 +56,7 @@ sudo apt upgrade -y
 # if you are adding worker only nodes install only these packages.
 sudo apt install libraspberrypi-bin rng-tools haveged net-tools sysstat lm-sensors smartmontools atop iftop -y
 # master nodes get those as well as these packages
-sudo apt install etcd docker.io ntp snapd ceph-common lvm2 cephadm build-essential golang git kubetail -y
+sudo apt install etcd docker.io ntp snapd ceph-common lvm2 cephadm build-essential golang git kubetail linux-modules-extra-raspi -y
 ```
 
 Now we are going to get etcd working on the system.
