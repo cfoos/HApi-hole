@@ -394,26 +394,21 @@ kubectl get storageclass
 
 Now we are going to add metallb and get it setup.
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/main/manifests/namespace.yaml
-kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/main/manifests/metallb.yaml
+kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.13.5/config/manifests/metallb-native.yaml
 kubectl create secret generic -n metallb-system memberlist --from-literal=secretkey="$(openssl rand -base64 128)"
 ```
 
 You will need to make a config for it to work. I'm using the layer2 protocol. For the addresses, set a range that is not in your dhcp range. My dhcp is .150 and higher and I do static IPs below .50 so .50-.99 is safe for metallb to assign as it pleases.
 ```bash
 cat <<EOF > metallb-config.yml
-apiVersion: v1
-kind: ConfigMap
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
 metadata:
   namespace: metallb-system
-  name: config
-data:
-  config: |
-    address-pools:
-    - name: default
-      protocol: layer2
-      addresses:
-      - 192.168.2.50-192.168.2.99
+  name: first-pool
+spec:
+  addresses:
+  - 192.168.2.50-192.168.2.99
 EOF
 ```
 
@@ -421,6 +416,22 @@ EOF
 kubectl apply -f metallb-config.yml
 ```
 
+```bash
+cat <<EOF > metalLbL2Advertise.yaml
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: example
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+  - first-pool
+EOF
+```
+
+```bash
+kubectl apply -f metalLbL2Advertise.yaml
+```
 
 Make sure all your pods start up and now we are on to the actual monitoring part. I use:
 https://github.com/carlosedp/cluster-monitoring
